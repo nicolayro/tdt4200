@@ -9,12 +9,12 @@
 #include "../inc/argument_utils.h"
 
 /* Convenient definitions */
-    // Convert 'struct timeval' into seconds in double prec. floating point
+// Convert 'struct timeval' into seconds in double prec. floating point
 #define WALLTIME(t) ((double)(t).tv_sec + 1e-6 * (double)(t).tv_usec)
 
 // TODO 4: Implement the macro MAX(a,b) which is used to find the largest value of a and b.
 //         It currently only gives the value of a.
-#define MAX(a,b) (a)
+#define MAX(a,b) ((a) > (b) ? (a) : (b))
 
 typedef int64_t int_t;
 typedef double real_t;
@@ -68,8 +68,9 @@ int_t (*time_step)(void);
 void
 swap ( real_t** m1, real_t** m2 )
 {
-    // TODO 3: Implement the swap function to swap the content of two variables.
-
+    real_t* m3 = *m1;
+    *m1 = *m2;
+    *m2 = m3;
 }
 
 
@@ -93,6 +94,11 @@ main ( int argc, char** argv )
     printf("max_iteration: %d\n", max_iteration);
     printf("snapshot_frequency: %d\n", snapshot_frequency);
 
+    // Task 2
+    for (size_t i = 0; i < 3; i++) {
+        temp[i] = (real_t*)malloc(N * sizeof(real_t));
+    }
+
     if (options->solver_type == 1) {
         time_step = &time_step_jacobi;
     } else if (options->solver_type == 2) {
@@ -109,7 +115,7 @@ main ( int argc, char** argv )
 
     // TODO 6: Record the execution time of the integration loop
     //         using the structs t_start and t_end declared above.
-
+    gettimeofday ( &t_start, NULL );
 
     for ( int_t step=0; step<=max_iteration; step++ )
     {
@@ -132,6 +138,8 @@ main ( int argc, char** argv )
         step = step + 1;
 
     }
+
+    gettimeofday ( &t_end, NULL );
 
     printf ( "Total iteration count: %ld\n", total_iteration_count );
     printf ( "Total elapsed time: %lf seconds\n",
@@ -304,7 +312,9 @@ void
 domain_finalize ( void )
 {
     // TODO 5: Free the heap-allocated memory.
-
+    for (int i = 0; i < 3; i++) {
+        free(temp[i]);
+    }
 }
 
 
