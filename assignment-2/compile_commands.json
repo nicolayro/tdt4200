@@ -1,0 +1,30 @@
+[
+  {
+    "arguments": [
+      "/usr/bin/clang",
+      "-c",
+      "-std=c11",
+      "-I/opt/homebrew/Cellar/open-mpi/4.1.5/include",
+      "-o",
+      "parallel",
+      "src/heat_parallel.c"
+    ],
+    "directory": "/Users/nicolayro/ntnu/Parallelle Beregninger/assignments/assignment-2",
+    "file": "/Users/nicolayro/ntnu/Parallelle Beregninger/assignments/assignment-2/src/heat_parallel.c",
+    "output": "/Users/nicolayro/ntnu/Parallelle Beregninger/assignments/assignment-2/parallel"
+  },
+  {
+    "arguments": [
+      "/usr/bin/clang",
+      "-c",
+      "-std=c11",
+      "-I/opt/homebrew/Cellar/open-mpi/4.1.5/include",
+      "-o",
+      "parallel",
+      "src/argument_utils.c"
+    ],
+    "directory": "/Users/nicolayro/ntnu/Parallelle Beregninger/assignments/assignment-2",
+    "file": "/Users/nicolayro/ntnu/Parallelle Beregninger/assignments/assignment-2/src/argument_utils.c",
+    "output": "/Users/nicolayro/ntnu/Parallelle Beregninger/assignments/assignment-2/parallel"
+  }
+]

@@ -1,0 +1,9 @@
+data/
+plots/
+video/
+check/
+.cache/
+
+parallel
+sequential
+compare_solutions
