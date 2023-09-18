@@ -27,10 +27,9 @@ real_t
     dx,
     dt;
 
-int 
-    size,
-    rank;
-int_t *local_sizes = NULL;
+int size, rank;
+int sub_grid_start;
+int sub_grid_end;
 
 #define T(i,j)                      temp[0][(i) * (M + 2) + (j)]
 #define T_next(i,j)                 temp[1][((i) * (M + 2) + (j))]
@@ -71,20 +70,23 @@ main ( int argc, char **argv )
         exit(1);
     }
 
-    N = options->N;
-    M = options->M;
-    max_iteration = options->max_iteration;
-    snapshot_frequency = options->snapshot_frequency;
-
     // Task 2
-    int sendData[M][N], receiveData[M][N];
     if (rank == 0) {
-        for (int i = 0; i < size; i++) {
-            MPI_Send(sendData, N, MPI_INT, 1, 0, MPI_COMM_WORLD);
-            MPI_Recv(receiveData, N, MPI_INT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        N = options->N;
+        M = options->M;
+        max_iteration = options->max_iteration;
+        snapshot_frequency = options->snapshot_frequency;
+        for (int i = 1; i < size; i++) {
+            MPI_Send(&M, 1, MPI_INT, i, 0, MPI_COMM_WORLD);
+            MPI_Send(&N, 1, MPI_INT, i, 0, MPI_COMM_WORLD);
+            MPI_Send(&max_iteration, 1, MPI_INT, i, 0, MPI_COMM_WORLD);
+            MPI_Send(&snapshot_frequency, 1, MPI_INT, i, 0, MPI_COMM_WORLD);
         }
     } else {
-        MPI_Recv(receiveData, N, MPI_INT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        MPI_Recv(&M, 1, MPI_INT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        MPI_Recv(&N, 1, MPI_INT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        MPI_Recv(&max_iteration, 1, MPI_INT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        MPI_Recv(&snapshot_frequency, 1, MPI_INT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
     }
 
     // TODO 3: Allocate space for each process' sub-grids
@@ -109,8 +111,8 @@ main ( int argc, char **argv )
         {
             printf (
                 "Iteration %ld of %ld (%.2lf%% complete)\n",
-                iteration,
-                max_iteration,
+                (long) iteration,
+                (long) max_iteration,
                 100.0 * (real_t) iteration / (real_t) max_iteration
             );
 
@@ -125,11 +127,11 @@ main ( int argc, char **argv )
             WALLTIME(t_end) - WALLTIME(t_start)
             );
 
-
     domain_finalize();
 
     // TODO 1: Finalize MPI
     MPI_Finalize();
+
     exit ( EXIT_SUCCESS );
 }
 
@@ -142,7 +144,7 @@ time_step ( void )
 
     for ( int_t x = 1; x <= N; x++ )
     {
-        for ( int_t y = 1; y <= M; y++ )
+        for ( int_t y = sub_grid_start; y <= sub_grid_end; y++ )
         {
             c = T(x, y);
 
@@ -170,7 +172,7 @@ boundary_condition ( void )
         T(x, M+1) = T(x, M-1);
     }
 
-    for ( int_t y = 1; y <= M; y++ )
+    for ( int_t y = sub_grid_start; y <= sub_grid_end; y++ )
     {
         T(0, y) = T(2, y);
         T(N+1, y) = T(N-1, y);
@@ -190,26 +192,23 @@ domain_init ( void )
 {
     // TODO 3: Allocate space for each process' sub-grids
     // and initialize data for the sub-grids
-    local_sizes = malloc(N * sizeof(int_t));
-
-    for (int_t i = 0; i < size; i++) {
-        local_sizes[i] = (int_t) N / size;
-    }
-
     real_t
         temperature,
         diffusivity;
 
-    temp[0] = malloc ( (N+2)*(M+2) * sizeof(real_t) );
-    temp[1] = malloc ( (N+2)*(M+2) * sizeof(real_t) );
-    thermal_diffusivity = malloc ( (N+2)*(M+2) * sizeof(real_t) );
+    temp[0] = malloc ( (N + 2)*(M / size + 2) * sizeof(real_t) );
+    temp[1] = malloc ( (N + 2)*(M / size + 2) * sizeof(real_t) );
+    thermal_diffusivity = malloc ( (N + 2)*(M / size + 2) * sizeof(real_t) );
 
     dt = 0.1;
     dx = 0.1;
 
+    sub_grid_start = rank * M / size + 1;
+    sub_grid_end = rank * M / size + M / size;
+
     for ( int_t x = 1; x <= N; x++ )
     {
-        for ( int_t y = 1; y <= M; y++ )
+        for ( int_t y = sub_grid_start; y <= sub_grid_end; y++ )
         {
             temperature = 30 + 30 * sin((x + y) / 20.0);
             diffusivity = 0.05 + (30 + 30 * sin((N - x + y) / 20.0)) / 605.0;
@@ -219,6 +218,7 @@ domain_init ( void )
             THERMAL_DIFFUSIVITY(x,y) = diffusivity;
         }
     }
+
 }
 
 
@@ -228,7 +228,7 @@ domain_save ( int_t iteration )
     int_t index = iteration / snapshot_frequency;
     char filename[256];
     memset ( filename, 0, 256*sizeof(char) );
-    sprintf ( filename, "data/%.5ld.bin", index );
+    sprintf ( filename, "data/%.5ld.bin", (long) index );
 
     FILE *out = fopen ( filename, "wb" );
     if ( ! out ) {
