@@ -4,7 +4,7 @@ DATADIR:=data/
 PLOTSDIR:=plots/
 VIDEODIR:=video/
 
-DATA:=$(DATADIR)*.dat
+DATA:=$(DATADIR)*.bin
 PLOTS:=$(PLOTSDIR)*.png
 VIDEO:=$(VIDEODIR)*.mp4
 

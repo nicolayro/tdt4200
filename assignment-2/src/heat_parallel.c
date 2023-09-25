@@ -27,9 +27,13 @@ real_t
     dx,
     dt;
 
-int size, rank;
-int sub_grid_start;
-int sub_grid_end;
+int 
+    size,
+    rank,
+    len,
+    left_neighbor,
+    right_neighbor,
+    sub_grid_offset;
 
 #define T(i,j)                      temp[0][(i) * (M + 2) + (j)]
 #define T_next(i,j)                 temp[1][((i) * (M + 2) + (j))]
@@ -142,9 +146,9 @@ time_step ( void )
     // TODO 4: Time step calculations
     real_t c, t, b, l, r, K, new_value;
 
-    for ( int_t x = 1; x <= N; x++ )
+    for ( int_t x = 1; x <= N / size; x++ )
     {
-        for ( int_t y = sub_grid_start; y <= sub_grid_end; y++ )
+        for ( int_t y = 1; y <= M; y++ )
         {
             c = T(x, y);
 
@@ -166,16 +170,16 @@ void
 boundary_condition ( void )
 {
     // TODO 5: Boundary conditions
-    for ( int_t x = 1; x <= N; x++ )
+    for ( int_t x = 1; x <= N / size; x++ )
     {
         T(x, 0) = T(x, 2);
         T(x, M+1) = T(x, M-1);
     }
 
-    for ( int_t y = sub_grid_start; y <= sub_grid_end; y++ )
+    for ( int_t y = 1; y <= M; y++ )
     {
         T(0, y) = T(2, y);
-        T(N+1, y) = T(N-1, y);
+        T(N / size + 1, y) = T(N / size - 1, y);
     }
 }
 
@@ -184,6 +188,25 @@ void
 border_exchange ( void )
 {
     // TODO 7: Communicate border values
+    
+    // Send my leftmost element to my neighbor on the left
+    MPI_Send (
+        &(T(1, 1)), 1, MPI_DOUBLE, left_neighbor, 0, MPI_COMM_WORLD
+    );
+    // Receive my right border element from my right neighbor's leftmost
+    MPI_Recv (
+        &(T(N / size + 1, M + 1)), 1, MPI_DOUBLE,
+        right_neighbor, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE
+    );
+    // Send my rightmost element to my neighbor on the right
+    MPI_Send (
+        &(T(N / size, M)), 1, MPI_DOUBLE, right_neighbor, 0, MPI_COMM_WORLD
+    );
+    // Receive my left border element from my left neighbor's rightmost
+    MPI_Recv (
+        &(T(0, 0)), 1, MPI_DOUBLE,
+        left_neighbor, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE
+    );
 }
 
 
@@ -196,26 +219,32 @@ domain_init ( void )
         temperature,
         diffusivity;
 
-    temp[0] = malloc ( (N + 2)*(M / size + 2) * sizeof(real_t) );
-    temp[1] = malloc ( (N + 2)*(M / size + 2) * sizeof(real_t) );
-    thermal_diffusivity = malloc ( (N + 2)*(M / size + 2) * sizeof(real_t) );
+    left_neighbor = ( rank + size - 1 ) % size;
+    right_neighbor = ( rank + size + 1 ) % size;
+
+    len = (N / size + 2) * (M + 2);
+    temp[0] = malloc ( len * sizeof(real_t) );
+    temp[1] = malloc ( len * sizeof(real_t) );
+    thermal_diffusivity = malloc ( len * sizeof(real_t) );
 
     dt = 0.1;
     dx = 0.1;
 
-    sub_grid_start = rank * M / size + 1;
-    sub_grid_end = rank * M / size + M / size;
+    sub_grid_offset = rank * N / size;
 
-    for ( int_t x = 1; x <= N; x++ )
+    for ( int_t x = sub_grid_offset + 1; x <= N / size + sub_grid_offset; x++ )
     {
-        for ( int_t y = sub_grid_start; y <= sub_grid_end; y++ )
+        for ( int_t y = 1; y <= M; y++ )
         {
             temperature = 30 + 30 * sin((x + y) / 20.0);
             diffusivity = 0.05 + (30 + 30 * sin((N - x + y) / 20.0)) / 605.0;
-            T(x,y) = temperature;
-            T_next(x,y) = temperature;
 
-            THERMAL_DIFFUSIVITY(x,y) = diffusivity;
+            int x_local = x - sub_grid_offset;
+
+            T(x_local,y) = temperature;
+            T_next(x_local,y) = temperature;
+
+            THERMAL_DIFFUSIVITY(x_local,y) = diffusivity;
         }
     }
 
@@ -230,13 +259,23 @@ domain_save ( int_t iteration )
     memset ( filename, 0, 256*sizeof(char) );
     sprintf ( filename, "data/%.5ld.bin", (long) index );
 
-    FILE *out = fopen ( filename, "wb" );
+    MPI_File out;
+    MPI_File_open(MPI_COMM_WORLD,
+                  filename,
+                  MPI_MODE_CREATE | MPI_MODE_WRONLY,
+                  MPI_INFO_NULL,
+                  &out
+    );
     if ( ! out ) {
         fprintf(stderr, "Failed to open file: %s\n", filename);
         exit(1);
     }
-    fwrite( temp[0], sizeof(real_t), (N+2)*(M+2), out );
-    fclose ( out );
+
+    MPI_Offset offset = rank * len * sizeof(real_t);
+    MPI_File_write_at_all( out, offset, temp[0],
+                         len, MPI_DOUBLE , MPI_STATUS_IGNORE ) ;
+
+    MPI_File_close ( &out );
 }
 
 
