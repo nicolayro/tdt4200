@@ -17,7 +17,21 @@
 typedef int64_t int_t;
 typedef double real_t;
 
-int rank, size;
+int 
+    rank, 
+    size,
+    local_N,
+    local_M,
+    local_x_offset,
+    local_y_offset;
+
+int dims[2];
+int coords[2];
+
+MPI_Comm comm_cart;
+
+int neighbours[4]; // List of neighbours
+enum Direction { LEFT, RIGHT, DOWN, UP }; // Direction enum for readability
 
 int_t
     M,
@@ -30,9 +44,9 @@ real_t
     *thermal_diffusivity,
     dt;
 
-#define T(x,y)                      temp[0][(y) * (N + 2) + (x)]
-#define T_next(x,y)                 temp[1][((y) * (N + 2) + (x))]
-#define THERMAL_DIFFUSIVITY(x,y)    thermal_diffusivity[(y) * (N + 2) + (x)]
+#define T(x,y)                      temp[0][(y) * (local_N + 2) + (x)]
+#define T_next(x,y)                 temp[1][((y) * (local_N + 2) + (x))]
+#define THERMAL_DIFFUSIVITY(x,y)    thermal_diffusivity[(y) * (local_N + 2) + (x)]
 
 void time_step ( void );
 void boundary_condition( void );
@@ -83,7 +97,7 @@ main ( int argc, char **argv )
 
     // Broadcast arguments to other ranks.
     MPI_Bcast(&N, 1, MPI_INT, 0, MPI_COMM_WORLD);
-    MPI_Bcast(&N, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&M, 1, MPI_INT, 0, MPI_COMM_WORLD);
     MPI_Bcast(&max_iteration, 1, MPI_INT, 0, MPI_COMM_WORLD);
     MPI_Bcast(&snapshot_frequency, 1, MPI_INT, 0, MPI_COMM_WORLD);
 
@@ -96,6 +110,8 @@ main ( int argc, char **argv )
     {
         // TODO 6: Implement border exchange.
         // Hint: Creating MPI datatypes for rows and columns might be useful.
+
+        border_exchange();
 
         boundary_condition();
 
@@ -137,9 +153,9 @@ time_step ( void )
     // TODO 3: Update the area of iteration so that each
     // process only iterates over its own subgrid.
 
-    for ( int_t y = 1; y <= M; y++ )
+    for ( int_t y = 1; y <= local_M; y++ )
     {
-        for ( int_t x = 1; x <= N; x++ )
+        for ( int_t x = 1; x <= local_N; x++ )
         {
             c = T(x, y);
 
@@ -162,20 +178,125 @@ boundary_condition ( void )
 {
     // TODO 4: Change the application of boundary conditions
     // to match the cartesian topology.
-
-    for ( int_t x = 1; x <= N; x++ )
-    {
-        T(x, 0) = T(x, 2);
-        T(x, M+1) = T(x, M-1);
+    
+    // Bottom
+    if (coords[0] == 0) {
+        for ( int_t x = 1; x <= local_N; x++ ) {
+            T(x, 0) = T(x, 2);
+        }
     }
 
-    for ( int_t y = 1; y <= M; y++ )
-    {
-        T(0, y) = T(2, y);
-        T(N+1, y) = T(N-1, y);
+    // Top
+    if (coords[0] == dims[0] - 1) {
+        for ( int_t x = 1; x <= local_N; x++ ) {
+            T(x, local_M+1) = T(x, local_M-1);
+        }
+    }
+
+    // Left
+    if (coords[1] == 0) {
+        for (int_t y = 1; y <= local_M; y++) {
+            T(0, y) = T(2, y);
+        }
+    }
+
+    // Right
+    if (coords[1] == dims[1] - 1) {
+        for (int_t y = 1; y <= local_M; y++) {
+            T(local_N+1, y) = T(local_N-1, y);
+        }
     }
 }
 
+
+void 
+border_exchange( void ) {
+    // Setup column and row datatypes
+    MPI_Datatype column, row;
+    MPI_Type_vector(local_M, 1, local_N + 2, MPI_DOUBLE, &column);
+    MPI_Type_vector(local_N, 1, 1, MPI_DOUBLE, &row);
+
+    MPI_Type_commit ( &column );
+    MPI_Type_commit ( &row );
+
+    // Bottom
+    MPI_Sendrecv(
+        // Send bottom
+        &T(1, local_M),
+        1,
+        row,
+        neighbours[UP],
+        0,
+        // Receive top
+        &T(1, 0),
+        1,
+        row,
+        neighbours[DOWN],
+        0,
+        // Communicator and status
+        comm_cart,
+        MPI_STATUS_IGNORE
+    );
+
+    // Up
+    MPI_Sendrecv(
+        // Send top
+        &T(1, 1),
+        1,
+        row,
+        neighbours[DOWN],
+        0,
+        // Receive down
+        &T(1, local_M + 1),
+        1,
+        row,
+        neighbours[UP],
+        0,
+        // Communicator and status
+        comm_cart,
+        MPI_STATUS_IGNORE
+    );
+
+    // Left
+    MPI_Sendrecv(
+        // Send left
+        &T(1, 1),
+        1,
+        column,
+        neighbours[LEFT],
+        0,
+        // Receive right
+        &T(local_N + 1, 1),
+        1,
+        column,
+        neighbours[RIGHT],
+        0,
+        // Communicator and status
+        comm_cart,
+        MPI_STATUS_IGNORE
+    );
+
+    // Right
+    MPI_Sendrecv(
+        // Send right
+        // temp[0] + (local_N + 1),
+        &T(local_N, 1),
+        1,
+        column,
+        neighbours[RIGHT],
+        0,
+        // Receive Left
+        // temp[0],
+        &T(0, 1),
+        1,
+        column,
+        neighbours[LEFT],
+        0,
+        // Communicator and status
+        comm_cart,
+        MPI_STATUS_IGNORE
+    );
+}
 
 void
 domain_init ( void )
@@ -187,24 +308,51 @@ domain_init ( void )
     // Hint: you can get useful information from the cartesian communicator.
     // Note: you are allowed to assume that the grid size is divisible by
     // the number of processes.
-    MPI_Comm cart = 0;
-    int coords[2];
-    int dims[2] = {3, 2};
-    int periods[2] = {0, 0};
-    printf("My cart: %p", cart);
 
-    temp[0] = malloc ( (M+2)*(N+2) * sizeof(real_t) );
-    temp[1] = malloc ( (M+2)*(N+2) * sizeof(real_t) );
-    thermal_diffusivity = malloc ( (M+2)*(N+2) * sizeof(real_t) );
+    int periods[2] = {0, 0};
+    // Dimensions
+    MPI_Dims_create(size, 2, dims);
+    // Create cartesian grid with new communicator
+    MPI_Cart_create(MPI_COMM_WORLD, 2, dims, periods, 0, &comm_cart);
+    // Get coordinates 
+    MPI_Cart_coords(comm_cart, rank, 2, coords);
+
+    // Local values and offsets
+    local_N = N / dims[1]; // x
+    local_M = M / dims[0]; // y
+    local_x_offset = coords[1] * local_N;
+    local_y_offset = coords[0] * local_M;
+
+    // Get neighbours;
+    // 0: left, 1: right, 2: down, 3: up
+    MPI_Cart_shift(comm_cart, 1, 1, &neighbours[LEFT], &neighbours[RIGHT]);
+    MPI_Cart_shift(comm_cart, 0, 1, &neighbours[DOWN], &neighbours[UP]);
+
+    printf("\nRank %d\n", rank);
+    printf("  Dimensions:  [%d, %d]\n", dims[0], dims[1]);
+    printf("  Coordinates: [%d, %d]\n", coords[0], coords[1]);
+    printf("  Options:\n");
+    printf("    M:                  %d\n", (int) M);
+    printf("    N:                  %d\n", (int) N);
+    printf("    max_iteration:      %d\n", (int) max_iteration);
+    printf("    snapshot_frequency: %d\n", (int) snapshot_frequency);
+    printf("  Local x offset: %d\n", local_x_offset);
+    printf("  Local y offset: %d\n", local_y_offset);
+
+    temp[0] = malloc ( (local_M+2)*(local_N+2) * sizeof(real_t) );
+    temp[1] = malloc ( (local_M+2)*(local_N+2) * sizeof(real_t) );
+    thermal_diffusivity = malloc ( (local_M+2)*(local_N+2) * sizeof(real_t) );
 
     dt = 0.1;
 
-    for ( int_t y = 1; y <= M; y++ )
+    for ( int_t y = 1; y <= local_M; y++ )
     {
-        for ( int_t x = 1; x <= N; x++ )
+        for ( int_t x = 1; x <= local_N; x++ )
         {
-            real_t temperature = 30 + 30 * sin((x + y) / 20.0);
-            real_t diffusivity = 0.05 + (30 + 30 * sin((N - x + y) / 20.0)) / 605.0;
+            real_t x_1 = x + local_x_offset;
+            real_t y_1 = y + local_y_offset;
+            real_t temperature = 30 + 30 * sin((x_1 + y_1) / 20.0);
+            real_t diffusivity = 0.05 + (30 + 30 * sin((N - x_1 + y_1) / 20.0)) / 605.0;
 
             T(x,y) = temperature;
             T_next(x,y) = temperature;
@@ -225,16 +373,52 @@ domain_save ( int_t iteration )
     memset ( filename, 0, 256*sizeof(char) );
     sprintf ( filename, "data/%.5ld.bin", index );
 
-    FILE *out = fopen ( filename, "wb" );
+    MPI_File out;
+    MPI_File_open(
+        comm_cart, 
+        filename,
+        MPI_MODE_CREATE | MPI_MODE_WRONLY,
+        MPI_INFO_NULL,
+        &out
+    );
+
     if ( ! out ) {
         fprintf(stderr, "Failed to open file: %s\n", filename);
         exit(1);
     }
-    for ( int_t iter = 1; iter <= N; iter++)
-    {
-        fwrite( temp[0] + (M+2) * iter + 1, sizeof(real_t), N, out );
-    }
-    fclose ( out );
+
+    MPI_Datatype data;
+    int size2[2] = { local_M + 2, local_N + 2};
+    int grid2[2] = { local_M, local_N };
+    int start2[2] = { 1, 1 };
+    MPI_Type_create_subarray(2, size2, grid2, start2,
+                             MPI_ORDER_C, MPI_DOUBLE, &data);
+    MPI_Type_commit(&data);
+
+    // Setup are for file writing
+    MPI_Datatype area;
+    int size[2] = { M, N };
+    int grid[2] = { local_M, local_N };
+    int start[2] = { local_y_offset, local_x_offset };
+    MPI_Type_create_subarray(2, size, grid, start, 
+                             MPI_ORDER_C, MPI_DOUBLE, &area);
+    MPI_Type_commit(&area);
+
+    // Restrict writing from this rank to the sub-area we defined above
+    MPI_File_set_view (
+        out, 0, MPI_DOUBLE, area, "native", MPI_INFO_NULL
+    );
+
+    MPI_File_write_all(
+        out,
+        // &T(1, 1),
+        temp[0],
+        1,
+        data,
+        MPI_STATUS_IGNORE
+    );
+
+    MPI_File_close(&out);
 }
 
 
