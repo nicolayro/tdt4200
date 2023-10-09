@@ -4,11 +4,11 @@ DATADIR:=data/
 PLOTSDIR:=plots/
 VIDEODIR:=video/
 
-DATA:=$(DATADIR)*.dat
+DATA:=$(DATADIR)*.bin
 PLOTS:=$(PLOTSDIR)*.png
 VIDEO:=$(VIDEODIR)*.mp4
 
-CC:=gcc
+CC:=/opt/homebrew/Cellar/gcc/13.2.0/bin/gcc-13
 CFLAGS+=-fopenmp
 LDLIBS+=-lm -pthread
 

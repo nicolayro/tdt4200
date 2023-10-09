@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <unistd.h>
 #include <math.h>
+#include <pthread.h>
 #include <sys/time.h>
 
 #include "../inc/argument_utils.h"
@@ -25,12 +26,20 @@ real_t
     *thermal_diffusivity,
     dt;
 
+#define THREADS 4
+pthread_t threads[THREADS];
+
+int arrived = 0;
+int departed = 0;
+pthread_mutex_t lock_arrive, lock_depart;
+pthread_cond_t cond_arrive, cond_depart;
+
 #define T(x,y)                      temp[0][(y) * (N + 2) + (x)]
 #define T_next(x,y)                 temp[1][((y) * (N + 2) + (x))]
 #define THERMAL_DIFFUSIVITY(x,y)    thermal_diffusivity[(y) * (N + 2) + (x)]
 
-void time_step ( void );
-void boundary_condition( void );
+void time_step ( int );
+void boundary_condition( int );
 void border_exchange( void );
 void domain_init ( void );
 void domain_save ( int_t iteration );
@@ -44,6 +53,62 @@ swap ( real_t** m1, real_t** m2 )
     tmp = *m1;
     *m1 = *m2;
     *m2 = tmp;
+}
+
+
+// Seems to be some issues with pthread_barrier on macos
+// so I`m using the custom signal implementation from the lecture instead.
+void
+signal_barrier(pthread_mutex_t *lock, pthread_cond_t *cond, int *count)
+{
+    pthread_mutex_lock(lock);
+
+    (*count)++;
+    if ((*count) < THREADS) {
+        while (pthread_cond_wait(cond, lock) != 0);
+    }
+
+    (*count)--;
+    if ((*count) > 0) {
+        pthread_cond_signal(cond);
+    }
+
+    pthread_mutex_unlock(lock);
+}
+
+// Moved the calculation into thread function
+void *calculate(void *args) 
+{
+    int offset = *(int *) args; // Thread offset
+    printf("Hello from thread %d\n", offset);
+
+    for ( int_t iteration = 0; iteration <= max_iteration; iteration++ )
+    {
+        boundary_condition(offset);
+
+        time_step(offset);
+
+        signal_barrier(&lock_arrive, &cond_arrive, &arrived);
+        // we wait for everyone do be done, then thread 0 saves results and performs swap
+        if (offset == 0)
+        {
+            if ( iteration % snapshot_frequency == 0 )
+            {
+                printf (
+                    "Iteration %ld of %ld (%.2lf%% complete)\n",
+                    iteration,
+                    max_iteration,
+                    100.0 * (real_t) iteration / (real_t) max_iteration
+                );
+
+                domain_save ( iteration );
+            }
+            swap( &temp[0], &temp[1] );
+        }
+        signal_barrier(&lock_depart, &cond_depart, &departed);
+    }
+
+    return NULL;
 }
 
 
@@ -67,26 +132,26 @@ main ( int argc, char **argv )
     struct timeval t_start, t_end;
     gettimeofday ( &t_start, NULL );
 
-    for ( int_t iteration = 0; iteration <= max_iteration; iteration++ )
-    {
-        boundary_condition();
+    pthread_mutex_init(&lock_arrive, NULL);
+    pthread_mutex_init(&lock_depart, NULL);
+    pthread_cond_init(&cond_arrive, NULL);
+    pthread_cond_init(&cond_depart, NULL);
 
-        time_step();
-
-        if ( iteration % snapshot_frequency == 0 )
-        {
-            printf (
-                "Iteration %ld of %ld (%.2lf%% complete)\n",
-                iteration,
-                max_iteration,
-                100.0 * (real_t) iteration / (real_t) max_iteration
-            );
-
-            domain_save ( iteration );
-        }
-
-        swap( &temp[0], &temp[1] );
+    // Used for safely sending index to threads
+    int offsets[THREADS];
+    for (int i = 0; i < THREADS; ++i) {
+        offsets[i] = i * M / THREADS;
+        pthread_create(threads + i, NULL, &calculate, offsets + i);
     }
+
+    for (int i = 0; i < THREADS; ++i) {
+        pthread_join(*(threads + i), NULL);
+    }
+
+    pthread_mutex_destroy(&lock_arrive);
+    pthread_mutex_destroy(&lock_arrive);
+    pthread_cond_destroy(&cond_arrive);
+    pthread_cond_destroy(&cond_arrive);
 
     gettimeofday ( &t_end, NULL );
     printf ( "Total elapsed time: %lf seconds\n",
@@ -101,11 +166,11 @@ main ( int argc, char **argv )
 
 
 void
-time_step ( void )
+time_step ( int offset )
 {
     real_t c, t, b, l, r, K, new_value;
 
-    for ( int_t y = 1; y <= M; y++ )
+    for ( int_t y = 1 + offset; y <= M / THREADS + offset; y++ )
     {
         for ( int_t x = 1; x <= N; x++ )
         {
@@ -126,7 +191,7 @@ time_step ( void )
 
 
 void
-boundary_condition ( void )
+boundary_condition ( int offset )
 {
     for ( int_t x = 1; x <= N; x++ )
     {
@@ -134,7 +199,7 @@ boundary_condition ( void )
         T(x, M+1) = T(x, M-1);
     }
 
-    for ( int_t y = 1; y <= M; y++ )
+    for ( int_t y = 1 + offset; y <= M / THREADS + offset; y++ )
     {
         T(0, y) = T(2, y);
         T(N+1, y) = T(N-1, y);
