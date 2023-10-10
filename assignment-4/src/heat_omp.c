@@ -67,25 +67,30 @@ main ( int argc, char **argv )
     struct timeval t_start, t_end;
     gettimeofday ( &t_start, NULL );
 
+    #pragma omp parallel
     for ( int_t iteration = 0; iteration <= max_iteration; iteration++ )
     {
         boundary_condition();
 
         time_step();
 
-        if ( iteration % snapshot_frequency == 0 )
+        #pragma omp master
         {
-            printf (
-                "Iteration %ld of %ld (%.2lf%% complete)\n",
-                iteration,
-                max_iteration,
-                100.0 * (real_t) iteration / (real_t) max_iteration
-            );
+            if ( iteration % snapshot_frequency == 0 )
+            {
+                printf (
+                    "Iteration %ld of %ld (%.2lf%% complete)\n",
+                    iteration,
+                    max_iteration,
+                    100.0 * (real_t) iteration / (real_t) max_iteration
+                );
 
-            domain_save ( iteration );
+                domain_save ( iteration );
+            }
+
+            swap( &temp[0], &temp[1] );
         }
-
-        swap( &temp[0], &temp[1] );
+        #pragma omp barrier
     }
 
     gettimeofday ( &t_end, NULL );
@@ -105,6 +110,7 @@ time_step ( void )
 {
     real_t c, t, b, l, r, K, new_value;
 
+    #pragma omp for
     for ( int_t y = 1; y <= M; y++ )
     {
         for ( int_t x = 1; x <= N; x++ )
@@ -134,6 +140,7 @@ boundary_condition ( void )
         T(x, M+1) = T(x, M-1);
     }
 
+    #pragma omp for
     for ( int_t y = 1; y <= M; y++ )
     {
         T(0, y) = T(2, y);

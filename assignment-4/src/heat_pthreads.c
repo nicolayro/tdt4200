@@ -15,6 +15,8 @@
 typedef int64_t int_t;
 typedef double real_t;
 
+pthread_t t;
+
 int_t
     M,
     N,
@@ -26,7 +28,7 @@ real_t
     *thermal_diffusivity,
     dt;
 
-#define THREADS 4
+#define THREADS 8
 pthread_t threads[THREADS];
 
 int arrived = 0;
